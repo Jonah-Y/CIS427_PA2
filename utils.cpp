@@ -46,7 +46,7 @@ void create_users(sqlite3* db) {
 
     // Create the Users table
     sql = "CREATE TABLE IF NOT EXISTS Users (" \
-        "ID INTEGER PRIMARY KEY AUTOINCREMENT," \
+        "ID TEXT PRIMARY KEY," \
         "email TEXT NOT NULL," \
         "first_name TEXT," \
         "last_name TEXT," \
@@ -78,8 +78,11 @@ void create_users(sqlite3* db) {
     if (user_count == 0) {
         fprintf(stdout, "Creating a user because no users currently exist\n");
 
-        sql = "INSERT INTO Users (ID, email, first_name, last_name, user_name, password, usd_balance)" \
-            "VALUES (1, 'joeshmoe@default.com', 'Joe', 'Shmoe', 'Default_User', 'password1', 100.00 );";
+        sql = "INSERT INTO Users (ID, email, first_name, last_name, user_name, password, usd_balance) VALUES" \
+            "('Root', 'root@default.com', 'Root', 'Admin', 'Root_User', 'Root01', 100.00 )," \
+            "('Mary', 'mary@default.com', 'Mary', 'Juana', 'Mary_User', 'Mary01', 100.00 )," \
+            "('John', 'john@default.com', 'John', 'Mayer', 'John_User', 'John01', 100.00 )," \
+            "('Moe', 'moe@default.com', 'Moe', 'Lester', 'Moe_User', 'Moe01', 100.00 );";
 
         rc = sqlite3_exec(db, sql, callback, 0, &zErrMsg);
         if( rc != SQLITE_OK ){

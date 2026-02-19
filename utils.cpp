@@ -76,7 +76,7 @@ void create_users(sqlite3* db) {
     }
 
     if (user_count == 0) {
-        fprintf(stdout, "Creating a user because no users currently exist\n");
+        fprintf(stdout, "Creating the users because no users currently exist\n");
 
         sql = "INSERT INTO Users (ID, email, first_name, last_name, user_name, password, usd_balance) VALUES" \
             "('Root', 'root@default.com', 'Root', 'Admin', 'Root_User', 'Root01', 100.00 )," \
@@ -135,16 +135,16 @@ void create_stocks(sqlite3* db) {
     }
 
     if (stock_count == 0) {
-        fprintf(stdout, "Inserting stocks for the default user because no stocks currently exist\n");
+        fprintf(stdout, "Inserting stocks for the Root user because no stocks currently exist\n");
 
         sql = "INSERT INTO Stocks (stock_symbol, stock_name, stock_balance, user_id) VALUES " \
-            "('AAPL', 'Apple', 0, 1), " \
-            "('MSFT', 'Microsoft', 0, 1), " \
-            "('AMZN', 'Amazon', 0, 1), " \
-            "('GOOG', 'Alphabet', 0, 1), "\
-            "('META', 'Meta', 0, 1), " \
-            "('NVDA', 'Nvidia', 0, 1), " \
-            "('TSLA', 'Tesla', 0, 1);";
+            "('AAPL', 'Apple', 0, 'Root'), " \
+            "('MSFT', 'Microsoft', 0, 'Root'), " \
+            "('AMZN', 'Amazon', 0, 'Root'), " \
+            "('GOOG', 'Alphabet', 0, 'Root'), "\
+            "('META', 'Meta', 0, 'Root'), " \
+            "('NVDA', 'Nvidia', 0, 'Root'), " \
+            "('TSLA', 'Tesla', 0, 'Root');";
 
         rc = sqlite3_exec(db, sql, callback, 0, &zErrMsg);
         if( rc != SQLITE_OK ){

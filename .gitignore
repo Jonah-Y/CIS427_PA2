@@ -8,6 +8,8 @@
 *.dll
 *.dylib
 a.out
+server
+client
 
 # Local / generated data
 # *.db

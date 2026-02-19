@@ -1,0 +1,28 @@
+# Build outputs
+*.bin
+*.exe
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.dylib
+a.out
+
+# Local / generated data
+# *.db
+
+# IDE / editor
+.vscode/
+*.swp
+*~
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build directories
+build/
+out/
+cmake-build-*/

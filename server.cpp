@@ -187,6 +187,7 @@ void add_client(int new_s, Pool *pool) {
             return;
         }
     }
+    // TODO: send the client a message that it cannot connect at this time, otherwise they just wait forever or until they hit enter?
     //the connection pool is full
     close(new_s);
 }

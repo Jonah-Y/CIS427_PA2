@@ -16,6 +16,7 @@
 #include <unistd.h>        
 #include "utils.hpp"
 #include <fcntl.h>
+#include <pthread.h>
 
 
 using namespace std;
@@ -23,7 +24,8 @@ using namespace std;
 #define SERVER_PORT 5432
 #define MAX_PENDING 5
 #define MAX_LINE    256
-#define MAX_CONNECTIONS 10
+#define MAX_CONNECTIONS 10  //TODO make sure everything works right with server at capacity
+#define THREAD_COUNT 10
 
 // list of valid commands
 unordered_set<string> valid_commands = {
@@ -43,11 +45,16 @@ typedef struct { /* represents a pool of connected descriptors */
     int nready;       /* number of ready descriptors from select */    
     int maxi;         /* highwater index into client array */ 
     int clientfd[FD_SETSIZE];    /* set of active descriptors */ 
- 	// ADD WHAT WOULD BE HELPFUL FOR PROJECT1
 } Pool;
 
+struct handle_client_args {
+    int fd;
+    sqlite3* db;
+};
+
 void add_client(int new_s, Pool *pool);
-void check_clients(Pool *p, sqlite3 * db);
+void check_clients(Pool *pool, sqlite3 *db, pthread_t* thread_handles, int listening_s);
+void* handle_client(void* args);
 
 
 int main(int argc, char* argv[]) {
@@ -123,53 +130,23 @@ int main(int argc, char* argv[]) {
         pool.clientfd[i] = -1;
     }
 
+    pthread_t* thread_handles;
+    thread_handles = (pthread_t*)malloc(THREAD_COUNT * sizeof(pthread_t));
+
     /* wait for connection, then receive and print text */
+    printf("Waiting on connection\n");
     while(1) {
         pool.ready_set = pool.read_set;     //save the current state
         pool.nready = select(pool.maxfd+1, &pool.ready_set, &pool.write_set, NULL, NULL);
 
-        printf("Waiting on connection\n");
         if(FD_ISSET(s, &pool.ready_set)) {  // Check if there is an incoming conn
-		    new_s = accept(s, (struct sockaddr *) &sin, &addr_len); // accept it
-		    add_client(new_s, &pool);	// add the client by the incoming socket fd
-	    }
-	
-	    check_clients(&pool, db);  // check if any data needs to be sent/received from clients
-        //TODO add all the code below to the check_clients function with threads for each client
-
-        printf("Connected\n");
-        while ((buf_len = recv(new_s, buf, sizeof(buf), 0))) {
-            buf[buf_len-1] = '\0';
-            printf("Recieved: %s\n", buf);
-            fflush(stdout);
-            
-            string request(buf);
-            
-            if (request.find("BUY", 0) == 0) {
-                buy_command(new_s, buf, db);
-            } else if (request.find("SELL", 0) == 0) {
-                sell_command(new_s, buf, db);
-            } else if (request == "LIST") {
-                list_command(new_s, buf, db);
-            } else if (request == "BALANCE") {
-                balance_command(new_s, buf, db);
-            } else if (request == "SHUTDOWN") {
-                int result = shutdown_command(new_s, buf, db);
-                if (result == -99) {
-                    close(new_s);
-                    close(s);
-                    exit(0);
-                }
-            } else if (request == "QUIT") {
-                quit_command(new_s, buf, db);
-                break;
-            } else {
-                fprintf(stderr, "Invalid message request: %s\n", request.c_str());
-                const char* error_code = "400 invalid command\nPlease use BUY, SELL, LIST, BALANCE, SHUTDOWN, or QUIT commands\n";
-                send(new_s, error_code, strlen(error_code), 0);
+		    new_s = accept(s, (struct sockaddr *) &sin, &addr_len);
+		    if (new_s >= 0) {
+                printf("Connected\n");
+                add_client(new_s, &pool);
             }
-        }
-        close(new_s);      
+	    }
+	    check_clients(&pool, db, thread_handles, s);  // check if any data needs to be sent/received from clients
     }
     sqlite3_close(db);
     return 0;
@@ -187,13 +164,80 @@ void add_client(int new_s, Pool *pool) {
             return;
         }
     }
-    // TODO: send the client a message that it cannot connect at this time, otherwise they just wait forever or until they hit enter?
-    //the connection pool is full
+    // TODO: test to make sure this all works
+    const char* response = "503 Service Unavailable because the capacity is full";
+    send(new_s, response, strlen(response), 0);
     close(new_s);
 }
 
-void check_clients(Pool *p, sqlite3 *db) {
-    // TODO: loop over client fds; for each i with p->clientfd[i] >= 0, if FD_ISSET(p->clientfd[i], &p->ready_set)
-    // then recv(), parse request, call buy_command/sell_command/etc., handle QUIT (remove from pool)
+void check_clients(Pool *pool, sqlite3 *db, pthread_t* thread_handles, int listening_s) {
+    for (int i = 0; i <= pool->maxi; i++) {
+        int fd = pool->clientfd[i];
 
+        if (fd >= 0 && FD_ISSET(fd, &pool->ready_set)) {
+
+            // TODO fix this it is a little funky
+            // Remove the client from the pool and ready set before handing off to a thread,
+            // so that file descriptors are not handled multiple times concurrently.
+            pool->clientfd[i] = -1;
+            FD_CLR(fd, &pool->read_set);
+            while (pool->maxi >= 0 && pool->clientfd[pool->maxi] < 0)
+                pool->maxi--;
+            if (fd == pool->maxfd) {
+                pool->maxfd = listening_s;
+                for (int j = 0; j <= pool->maxi; j++)
+                    if (pool->clientfd[j] >= 0 && pool->clientfd[j] > pool->maxfd)
+                        pool->maxfd = pool->clientfd[j];
+            }
+
+            // create a new thread for this connection
+            handle_client_args* args = new handle_client_args{fd, db};
+            pthread_create(&thread_handles[i], NULL, handle_client, (void*)args);
+        }
+    }
+}
+
+
+void* handle_client(void* args) {
+    handle_client_args* data = static_cast<handle_client_args*>(args);
+    int new_s = data->fd;
+    sqlite3* db = data->db;
+    delete data;
+
+    char buf[MAX_LINE];
+    int buf_len;
+
+    while ((buf_len = recv(new_s, buf, sizeof(buf), 0))) {
+        buf[buf_len-1] = '\0';
+        printf("Recieved: %s\n", buf);
+        fflush(stdout);
+        
+        string request(buf);
+        
+        if (request.find("BUY", 0) == 0) {
+            buy_command(new_s, buf, db);
+        } else if (request.find("SELL", 0) == 0) {
+            sell_command(new_s, buf, db);
+        } else if (request == "LIST") {
+            list_command(new_s, buf, db);
+        } else if (request == "BALANCE") {
+            balance_command(new_s, buf, db);
+        } else if (request == "SHUTDOWN") {
+            int result = shutdown_command(new_s, buf, db);
+            if (result == -99) {
+                close(new_s);
+                //close(s);     TODO this needs to be thought out and fixed
+                //exit(0);
+            }
+        } else if (request == "QUIT") {
+            quit_command(new_s, buf, db);
+            break;
+        } else {
+            fprintf(stderr, "Invalid message request: %s\n", request.c_str());
+            const char* error_code = "400 invalid command\nPlease use BUY, SELL, LIST, BALANCE, SHUTDOWN, or QUIT commands\n";
+            send(new_s, error_code, strlen(error_code), 0);
+        }
+    }
+    close(new_s);
+    return NULL;
 }

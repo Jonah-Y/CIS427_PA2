@@ -78,7 +78,8 @@ int main(int argc, char * argv[]) {
         memset(response, 0, sizeof(response));
         int bytes_received = recv(s, response, sizeof(response) - 1, 0);
        
-        if (bytes_received <= 0) {
+        if (bytes_received <= 0
+            || strncmp(buf, "503", 3) == 0) { //TODO is this the best way to handle if the server capacity is full?
             cout << "Server closed connection" << endl;
             break;
         }

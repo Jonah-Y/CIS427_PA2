@@ -55,6 +55,16 @@ int balance_command(int socket, char* request, sqlite3* db, const std::string& u
  */
 int shutdown_command(int socket, char* request, sqlite3* db, bool is_root);
 
+/** PA2: Deposits USD into the logged-in user's account.
+ *  Format: DEPOSIT <amount>
+ */
+int deposit_command(int socket, char* request, sqlite3* db, const std::string& username);
+
+/** PA2: Looks up stocks by ticker for the logged-in user. Supports partial matches.
+ *  Format: LOOKUP <ticker>
+ */
+int lookup_command(int socket, char* request, sqlite3* db, const std::string& username);
+
 /** Terminates the client connection. */
 int quit_command(int socket, char* request, sqlite3* db);
 

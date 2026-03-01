@@ -56,8 +56,8 @@ int main(int argc, char * argv[]) {
     }
 
     cout << "Connected to server" << endl;
-    cout << "Available commands: LOGIN, LOGOUT, BUY, SELL, LIST, BALANCE, QUIT, SHUTDOWN" << endl;
-    cout << "--------------------------------------------------------------------------" << endl;
+    cout << "Available commands: LOGIN, LOGOUT, BUY, SELL, LIST, BALANCE, DEPOSIT, LOOKUP, WHO, QUIT, SHUTDOWN" << endl;
+    cout << "-----------------------------------------------------------------------------------------------" << endl;
 
     /* main communication loop */
     while (fgets(buf, sizeof(buf), stdin)) {

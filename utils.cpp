@@ -582,6 +582,129 @@ int balance_command(int socket, char* request, sqlite3* db, const string& userna
     return 0;
 }
 
+/** Deposits USD into the logged-in user's account.
+ *  Format: DEPOSIT <amount>
+ */
+int deposit_command(int socket, char* request, sqlite3* db, const string& username) {
+    // parse input string
+    char *saveptr = nullptr;
+    strtok_r(request, " ", &saveptr);         // skip "DEPOSIT"
+    char *amount_str = strtok_r(nullptr, " ", &saveptr);
+
+    char response[256];
+    char sql[256];
+    char *zErrMsg = 0;
+
+    // check for format errors
+    if (!amount_str) {
+        snprintf(response, sizeof(response),
+                 "400 message format error\nCorrect format: DEPOSIT <amount>\n");
+        send(socket, response, strlen(response), 0);
+        return -1;
+    }
+
+    // convert amount to a number
+    double amount;
+    try {
+        amount = stod(amount_str);
+    } catch (const std::exception&) {
+        snprintf(response, sizeof(response),
+                 "400 message format error\nAmount must be a number.\n");
+        send(socket, response, strlen(response), 0);
+        return -1;
+    }
+
+    if (amount <= 0) {
+        snprintf(response, sizeof(response),
+                 "400 message format error\nAmount must be positive.\n");
+        send(socket, response, strlen(response), 0);
+        return -1;
+    }
+
+    // get the user's current balance
+    double user_balance = -1;
+    snprintf(sql, sizeof(sql),
+             "SELECT usd_balance FROM Users WHERE LOWER(ID) = LOWER('%s')",
+             username.c_str());
+
+    int rc = sqlite3_exec(db, sql, getBalance_callback, &user_balance, &zErrMsg);
+    if (rc != SQLITE_OK) { handle_SQL_error(socket, zErrMsg); return -1; }
+    if (user_balance < 0) {
+        snprintf(response, sizeof(response), "500 User %s does not exist\n", username.c_str());
+        send(socket, response, strlen(response), 0);
+        return -1;
+    }
+
+    // add the deposit amount and update the database
+    user_balance += amount;
+    snprintf(sql, sizeof(sql),
+             "UPDATE Users SET usd_balance=%f WHERE LOWER(ID) = LOWER('%s')",
+             user_balance, username.c_str());
+
+    rc = sqlite3_exec(db, sql, nullptr, nullptr, &zErrMsg);
+    if (rc != SQLITE_OK) { handle_SQL_error(socket, zErrMsg); return -1; }
+
+    snprintf(response, sizeof(response),
+             "deposit successfully. New balance $%.2f\n", user_balance);
+    send(socket, response, strlen(response), 0);
+    return 0;
+}
+
+/** Looks up stocks by ticker for the logged-in user. Supports partial matches.
+ *  Format: LOOKUP <ticker>
+ */
+int lookup_command(int socket, char* request, sqlite3* db, const string& username) {
+    // parse input string
+    char *saveptr = nullptr;
+    strtok_r(request, " ", &saveptr);         // skip "LOOKUP"
+    char *ticker = strtok_r(nullptr, " ", &saveptr);
+
+    char response[512];
+    char sql[256];
+    char *zErrMsg = 0;
+
+    // check for format errors
+    if (!ticker) {
+        snprintf(response, sizeof(response),
+                 "400 message format error\nCorrect format: LOOKUP <ticker>\n");
+        send(socket, response, strlen(response), 0);
+        return -1;
+    }
+
+    // use LIKE for partial or full ticker match, filtered to this user's stocks
+    string records;
+    snprintf(sql, sizeof(sql),
+             "SELECT stock_symbol, stock_balance FROM Stocks "
+             "WHERE LOWER(user_id) = LOWER('%s') AND stock_symbol LIKE '%%%s%%';",
+             username.c_str(), ticker);
+
+    int rc = sqlite3_exec(db, sql, list_callback, &records, &zErrMsg);
+    if (rc != SQLITE_OK) {
+        snprintf(response, sizeof(response),
+                 "403 message format error\nDatabase error: %s\n", zErrMsg);
+        sqlite3_free(zErrMsg);
+        send(socket, response, strlen(response), 0);
+        return -1;
+    }
+
+    if (records.empty()) {
+        const char* not_found = "404 Your search did not match any records.\n";
+        send(socket, not_found, strlen(not_found), 0);
+    } else {
+        // count how many lines (matches) we got
+        int match_count = 0;
+        for (char c : records) if (c == '\n') match_count++;
+
+        string out = "200 OK\n";
+        out += "Found " + to_string(match_count) + " match";
+        if (match_count != 1) out += "es";
+        out += "\n";
+        out += records;
+        send(socket, out.c_str(), out.length(), 0);
+    }
+    return 0;
+}
+
 /** Terminates the client connection. */
 int quit_command(int socket, char* request, sqlite3* db) {
     /* acknowledge quit */

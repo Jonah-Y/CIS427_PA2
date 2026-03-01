@@ -6,6 +6,7 @@
 #include <strings.h>
 #include <sys/select.h>
 #include <unordered_set>
+#include <map>
 #include <string>
 #include <iostream>
 #include <sys/types.h>
@@ -35,6 +36,11 @@ unordered_set<string> valid_commands = {
 // Mutex to protect SQLite from concurrent access across threads
 pthread_mutex_t db_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+// Tracks currently logged-in users for the WHO command: username -> IP address
+// Protected by active_users_mutex since multiple threads can login/logout at once
+map<string, string> active_users;
+pthread_mutex_t active_users_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 // Pool of active client descriptors managed by select()
 typedef struct {
     int maxfd;                    // largest descriptor in read_set
@@ -44,15 +50,17 @@ typedef struct {
     int nready;                   // number of ready descriptors from select
     int maxi;                     // highwater index into client array
     int clientfd[FD_SETSIZE];     // set of active descriptors
+    char client_ip[FD_SETSIZE][INET_ADDRSTRLEN];  // IP address for each slot
 } Pool;
 
 // Arguments passed to each client thread
 struct handle_client_args {
     int fd;
     sqlite3* db;
+    char ip[INET_ADDRSTRLEN];   // client IP address, used for WHO command
 };
 
-void add_client(int new_s, Pool *pool);
+void add_client(int new_s, const char* ip, Pool *pool);
 void check_clients(Pool *pool, sqlite3 *db, pthread_t* thread_handles, int listening_s);
 void* handle_client(void* args);
 
@@ -138,8 +146,10 @@ int main(int argc, char* argv[]) {
         if (FD_ISSET(s, &pool.ready_set)) {  // check if there is an incoming connection
             new_s = accept(s, (struct sockaddr *) &sin, &addr_len);
             if (new_s >= 0) {
-                printf("Connected\n");
-                add_client(new_s, &pool);
+                char client_ip[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &sin.sin_addr, client_ip, sizeof(client_ip));
+                printf("Connected from %s\n", client_ip);
+                add_client(new_s, client_ip, &pool);
             }
         }
         // Check if any data needs to be sent/received from existing clients
@@ -152,10 +162,11 @@ int main(int argc, char* argv[]) {
 }
 
 /** Adds a new client socket to the pool so select() will watch it. */
-void add_client(int new_s, Pool *pool) {
+void add_client(int new_s, const char* ip, Pool *pool) {
     for (int i = 0; i < MAX_CONNECTIONS; i++) {
         if (pool->clientfd[i] == -1) {
             pool->clientfd[i] = new_s;
+            strncpy(pool->client_ip[i], ip, INET_ADDRSTRLEN);
             FD_SET(new_s, &pool->read_set);
             if (new_s > pool->maxfd)
                 pool->maxfd = new_s;
@@ -178,6 +189,8 @@ void check_clients(Pool *pool, sqlite3 *db, pthread_t* thread_handles, int liste
         if (fd >= 0 && FD_ISSET(fd, &pool->ready_set)) {
             // Remove the client from the pool before handing off to a thread
             // so the same descriptor is not handled concurrently
+            char ip[INET_ADDRSTRLEN];
+            strncpy(ip, pool->client_ip[i], INET_ADDRSTRLEN);
             pool->clientfd[i] = -1;
             FD_CLR(fd, &pool->read_set);
             while (pool->maxi >= 0 && pool->clientfd[pool->maxi] < 0)
@@ -190,7 +203,10 @@ void check_clients(Pool *pool, sqlite3 *db, pthread_t* thread_handles, int liste
             }
 
             // Create a new thread to handle this client connection
-            handle_client_args* args = new handle_client_args{fd, db};
+            handle_client_args* args = new handle_client_args();
+            args->fd = fd;
+            args->db = db;
+            strncpy(args->ip, ip, INET_ADDRSTRLEN);
             pthread_create(&thread_handles[i], NULL, handle_client, (void*)args);
         }
     }
@@ -203,6 +219,8 @@ void* handle_client(void* args) {
     handle_client_args* data = static_cast<handle_client_args*>(args);
     int new_s   = data->fd;
     sqlite3* db = data->db;
+    char client_ip[INET_ADDRSTRLEN];
+    strncpy(client_ip, data->ip, INET_ADDRSTRLEN);
     delete data;
 
     char buf[MAX_LINE];
@@ -260,6 +278,10 @@ void* handle_client(void* args) {
             if (ok) {
                 logged_in        = true;
                 session_username = username;
+                // add to active users map so WHO can see this session
+                pthread_mutex_lock(&active_users_mutex);
+                active_users[session_username] = client_ip;
+                pthread_mutex_unlock(&active_users_mutex);
                 printf("[LOGIN] '%s' logged in successfully.\n", session_username.c_str());
                 const char* okMsg = "200 OK\n";
                 send(new_s, okMsg, strlen(okMsg), 0);
@@ -278,6 +300,10 @@ void* handle_client(void* args) {
                 send(new_s, err, strlen(err), 0);
                 continue;
             }
+            // remove from active users map
+            pthread_mutex_lock(&active_users_mutex);
+            active_users.erase(session_username);
+            pthread_mutex_unlock(&active_users_mutex);
             printf("[LOGOUT] '%s' logged out.\n", session_username.c_str());
             logged_in        = false;
             session_username = "";
@@ -295,8 +321,25 @@ void* handle_client(void* args) {
             continue;
         }
 
-        // Check root status once - used by LIST and SHUTDOWN
+        // Check root status once - used by LIST, SHUTDOWN, and WHO
         bool is_root = (strcasecmp(session_username.c_str(), "root") == 0);
+
+        // WHO - root only, no DB access needed, just reads the active_users map
+        if (request == "WHO") {
+            if (!is_root) {
+                const char* denied = "403 Forbidden: only root can use WHO\n";
+                send(new_s, denied, strlen(denied), 0);
+                continue;
+            }
+            pthread_mutex_lock(&active_users_mutex);
+            string response = "200 OK\nThe list of active users:\n";
+            for (auto& entry : active_users) {
+                response += entry.first + " " + entry.second + "\n";
+            }
+            pthread_mutex_unlock(&active_users_mutex);
+            send(new_s, response.c_str(), response.length(), 0);
+            continue;
+        }
 
         // Lock the database mutex for all commands that touch the DB
         pthread_mutex_lock(&db_mutex);
@@ -313,6 +356,12 @@ void* handle_client(void* args) {
         } else if (request == "BALANCE") {
             balance_command(new_s, buf, db, session_username);
 
+        } else if (request.find("DEPOSIT", 0) == 0) {
+            deposit_command(new_s, buf, db, session_username);
+
+        } else if (request.find("LOOKUP", 0) == 0) {
+            lookup_command(new_s, buf, db, session_username);
+
         } else if (request == "SHUTDOWN") {
             int result = shutdown_command(new_s, buf, db, is_root);
             pthread_mutex_unlock(&db_mutex);
@@ -326,12 +375,20 @@ void* handle_client(void* args) {
             fprintf(stderr, "Invalid message request: %s\n", request.c_str());
             const char* error_code =
                 "400 invalid command\n"
-                "Valid commands: LOGIN, LOGOUT, BUY, SELL, LIST, BALANCE, SHUTDOWN, QUIT\n";
+                "Valid commands: LOGIN, LOGOUT, BUY, SELL, LIST, BALANCE, "
+                "DEPOSIT, LOOKUP, WHO, SHUTDOWN, QUIT\n";
             send(new_s, error_code, strlen(error_code), 0);
             continue;
         }
 
         pthread_mutex_unlock(&db_mutex);
+    }
+
+    // Clean up session if the client disconnected without logging out
+    if (logged_in) {
+        pthread_mutex_lock(&active_users_mutex);
+        active_users.erase(session_username);
+        pthread_mutex_unlock(&active_users_mutex);
     }
 
     close(new_s);

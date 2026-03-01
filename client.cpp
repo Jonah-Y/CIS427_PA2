@@ -55,9 +55,15 @@ int main(int argc, char * argv[]) {
         exit(1);
     }
 
-    cout << "Connected to server" << endl;
-    cout << "Available commands: LOGIN, LOGOUT, BUY, SELL, LIST, BALANCE, DEPOSIT, LOOKUP, WHO, QUIT, SHUTDOWN" << endl;
-    cout << "-----------------------------------------------------------------------------------------------" << endl;
+    /* receive connection success or error message */
+    memset(response, 0, sizeof(response));
+    int bytes_received = recv(s, response, sizeof(response) - 1, 0);
+    fprintf(stdout, "%s", response);
+    if (strncmp(response, "503", 3) == 0){
+        close(s);
+        exit(1);
+    }
+    
 
     /* main communication loop */
     while (fgets(buf, sizeof(buf), stdin)) {
@@ -78,7 +84,7 @@ int main(int argc, char * argv[]) {
 
         /* receive response */
         memset(response, 0, sizeof(response));
-        int bytes_received = recv(s, response, sizeof(response) - 1, 0);
+        bytes_received = recv(s, response, sizeof(response) - 1, 0);
 
         if (bytes_received <= 0 || strncmp(response, "503", 3) == 0) {
             // Connection closed or server is at capacity

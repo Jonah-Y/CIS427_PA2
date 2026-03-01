@@ -159,7 +159,7 @@ void create_stocks(sqlite3* db) {
     }
 }
 
-/** PA2: Callback that captures the first column of the first returned row as a double. */
+/** Callback that captures the first column of the first returned row as a double. */
 static int getBalance_callback(void *data, int argc, char **argv, char **azColName) {
     double* balance = static_cast<double*>(data);
     *balance = atof(argv[0]);
@@ -175,7 +175,7 @@ static void handle_SQL_error(int socket, char* zErrMsg) {
     sqlite3_free(zErrMsg);
 }
 
-/** PA2: Verifies username and password against the Users table.
+/** Verifies username and password against the Users table.
  *  The Users table uses the username as the TEXT primary key (ID column).
  *  LOWER() on ID provides case-insensitive username matching.
  *  Returns true if credentials match, false otherwise.

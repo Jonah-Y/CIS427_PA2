@@ -41,6 +41,11 @@ pthread_mutex_t db_mutex = PTHREAD_MUTEX_INITIALIZER;
 map<string, string> active_users;
 pthread_mutex_t active_users_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+// Variables to track that the thread pool of connections does not exceed capacity
+int num_clients_in_pool = 0;
+int num_threads = 0;
+pthread_mutex_t capacity_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 // Pool of active client descriptors managed by select()
 typedef struct {
     int maxfd;                    // largest descriptor in read_set
@@ -53,13 +58,14 @@ typedef struct {
     char client_ip[FD_SETSIZE][INET_ADDRSTRLEN];  // IP address for each slot
 } Pool;
 
-// Arguments passed to each client thread
+// Arguments passed to handle_client()
 struct handle_client_args {
     int fd;
     sqlite3* db;
     char ip[INET_ADDRSTRLEN];   // client IP address, used for WHO command
 };
 
+bool capacity_ok(int new_s);
 void add_client(int new_s, const char* ip, Pool *pool);
 void check_clients(Pool *pool, sqlite3 *db, pthread_t* thread_handles, int listening_s);
 void* handle_client(void* args);
@@ -145,7 +151,7 @@ int main(int argc, char* argv[]) {
 
         if (FD_ISSET(s, &pool.ready_set)) {  // check if there is an incoming connection
             new_s = accept(s, (struct sockaddr *) &sin, &addr_len);
-            if (new_s >= 0) {
+            if (capacity_ok(new_s)) {
                 char client_ip[INET_ADDRSTRLEN];
                 inet_ntop(AF_INET, &sin.sin_addr, client_ip, sizeof(client_ip));
                 printf("Connected from %s\n", client_ip);
@@ -159,10 +165,34 @@ int main(int argc, char* argv[]) {
     free(thread_handles);
     sqlite3_close(db);
     return 0;
+} // end main
+
+
+/** Checks if there is enough capacity to add a new connection. Capacity will not exceed MAX_CONNECTIONS */
+bool capacity_ok(int new_s) {
+    pthread_mutex_lock(&capacity_mutex);
+    bool ok = (num_clients_in_pool + num_threads < MAX_CONNECTIONS);
+    pthread_mutex_unlock(&capacity_mutex);
+    if (ok) {
+        const char * response = "Connected to server\n" \
+                        "Available commands: LOGIN, LOGOUT, BUY, SELL, LIST, BALANCE, DEPOSIT, LOOKUP, WHO, QUIT, SHUTDOWN\n" \
+                        "-----------------------------------------------------------------------------------------------\n";
+        send(new_s, response, strlen(response), 0);
+        return true;
+    } else {
+        // Server is at capacity - notify client and close
+        const char* response = "503 Service Unavailable: server is at capacity\n";
+        send(new_s, response, strlen(response), 0);
+        close(new_s);
+        return false;
+    }
 }
 
 /** Adds a new client socket to the pool so select() will watch it. */
 void add_client(int new_s, const char* ip, Pool *pool) {
+    pthread_mutex_lock(&capacity_mutex);
+    num_clients_in_pool++;
+    pthread_mutex_unlock(&capacity_mutex);
     for (int i = 0; i < MAX_CONNECTIONS; i++) {
         if (pool->clientfd[i] == -1) {
             pool->clientfd[i] = new_s;
@@ -175,10 +205,6 @@ void add_client(int new_s, const char* ip, Pool *pool) {
             return;
         }
     }
-    // Server is at capacity - notify client and close
-    const char* response = "503 Service Unavailable: server is at capacity\n";
-    send(new_s, response, strlen(response), 0);
-    close(new_s);
 }
 
 /** Iterates over ready client descriptors and spawns a thread for each one. */
@@ -202,6 +228,10 @@ void check_clients(Pool *pool, sqlite3 *db, pthread_t* thread_handles, int liste
                         pool->maxfd = pool->clientfd[j];
             }
 
+            pthread_mutex_lock(&capacity_mutex);
+            num_clients_in_pool--;
+            num_threads++;
+            pthread_mutex_unlock(&capacity_mutex);
             // Create a new thread to handle this client connection
             handle_client_args* args = new handle_client_args();
             args->fd = fd;
@@ -250,7 +280,7 @@ void* handle_client(void* args) {
         }
 
         // LOGIN - parse credentials and verify against the database
-        if (request.find("LOGIN ", 0) == 0) {
+        if (request.find("LOGIN", 0) == 0) {
             if (logged_in) {
                 char msg[128];
                 snprintf(msg, sizeof(msg),
@@ -392,5 +422,8 @@ void* handle_client(void* args) {
     }
 
     close(new_s);
+    pthread_mutex_lock(&capacity_mutex);
+    num_threads--;
+    pthread_mutex_unlock(&capacity_mutex);
     return NULL;
 }

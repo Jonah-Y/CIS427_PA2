@@ -209,16 +209,14 @@ bool verify_login(sqlite3* db, const string& username, const string& password) {
 
 /** Buys an amount of stocks and responds to the client with the new balance.
  *  Creates or updates a record in the Stocks table if one does not exist.
- *  user_id is a TEXT string matching the Users.ID primary key.
  */
-int buy_command(int socket, char* request, sqlite3* db) {
+int buy_command(int socket, char* request, sqlite3* db, const string& session_username) {
     // parse input string
     char *saveptr = nullptr;
     char *buy = strtok_r(request, " ", &saveptr);
     char *stock_symbol = strtok_r(nullptr, " ", &saveptr);
     char *amount_str = strtok_r(nullptr, " ", &saveptr);
     char *price_str = strtok_r(nullptr, " ", &saveptr);
-    char *user_id = strtok_r(nullptr, " ", &saveptr);
 
     char response[256];
     char sql[256];
@@ -226,11 +224,11 @@ int buy_command(int socket, char* request, sqlite3* db) {
     char *zErrMsg = 0;
 
     // check for format errors
-    if (!buy || !stock_symbol || !amount_str || !price_str || !user_id) {
+    if (!buy || !stock_symbol || !amount_str || !price_str) {
         fprintf(stderr, "BUY command received but incorrectly formatted\n");
         fprintf(stderr, "Error message sent to client\n");
         snprintf(response, sizeof(response),
-                 "403 message format error\nCorrect format: BUY <stock_symbol> <amount_to_buy> <price_per_stock> <user_id>\n");
+                 "403 message format error\nCorrect format: BUY <stock_symbol> <amount_to_buy> <price_per_stock>\n");
         send(socket, response, strlen(response), 0);
         return -1;
     }
@@ -265,12 +263,12 @@ int buy_command(int socket, char* request, sqlite3* db) {
     // check if the user is in the database and if so get the balance
     double user_balance = -1;
     snprintf(sql, sizeof(sql),
-             "SELECT usd_balance FROM Users WHERE ID='%s'", user_id);
+             "SELECT usd_balance FROM Users WHERE ID='%s'", session_username.c_str());
 
     rc = sqlite3_exec(db, sql, getBalance_callback, &user_balance, &zErrMsg);
     if (rc != SQLITE_OK) { handle_SQL_error(socket, zErrMsg); return -1; }
     if (user_balance < 0) {
-        snprintf(response, sizeof(response), "500 user %s does not exist\n", user_id);
+        snprintf(response, sizeof(response), "500 user %s does not exist\n", session_username.c_str());
         fprintf(stderr, "%sError message sent to client\n", response);
         send(socket, response, strlen(response), 0);
         return -1;
@@ -287,7 +285,7 @@ int buy_command(int socket, char* request, sqlite3* db) {
     // update the Users balance in the database
     user_balance -= shares_bought_USD;
     snprintf(sql, sizeof(sql),
-             "UPDATE Users SET usd_balance=%f WHERE ID='%s'", user_balance, user_id);
+             "UPDATE Users SET usd_balance=%f WHERE ID='%s'", user_balance, session_username.c_str());
     rc = sqlite3_exec(db, sql, nullptr, nullptr, &zErrMsg);
     if (rc != SQLITE_OK) { handle_SQL_error(socket, zErrMsg); return -1; }
 
@@ -295,7 +293,7 @@ int buy_command(int socket, char* request, sqlite3* db) {
     double shares_owned = -1;
     snprintf(sql, sizeof(sql),
              "SELECT stock_balance FROM Stocks WHERE stock_symbol='%s' AND user_id='%s'",
-             stock_symbol, user_id);
+             stock_symbol, session_username.c_str());
     rc = sqlite3_exec(db, sql, getBalance_callback, &shares_owned, &zErrMsg);
     if (rc != SQLITE_OK) { handle_SQL_error(socket, zErrMsg); return -1; }
 
@@ -303,13 +301,13 @@ int buy_command(int socket, char* request, sqlite3* db) {
         shares_owned = 0;
         snprintf(sql, sizeof(sql),
                  "INSERT INTO Stocks (stock_symbol, stock_name, stock_balance, user_id) VALUES ('%s', '%s', %f, '%s');",
-                 stock_symbol, stock_symbol, num_shares_to_buy, user_id);
+                 stock_symbol, stock_symbol, num_shares_to_buy, session_username.c_str());
         rc = sqlite3_exec(db, sql, nullptr, nullptr, &zErrMsg);
         if (rc != SQLITE_OK) { handle_SQL_error(socket, zErrMsg); return -1; }
     } else {
         snprintf(sql, sizeof(sql),
                  "UPDATE Stocks SET stock_balance=%f WHERE stock_symbol='%s' AND user_id='%s'",
-                 shares_owned + num_shares_to_buy, stock_symbol, user_id);
+                 shares_owned + num_shares_to_buy, stock_symbol, session_username.c_str());
         rc = sqlite3_exec(db, sql, nullptr, nullptr, &zErrMsg);
         if (rc != SQLITE_OK) { handle_SQL_error(socket, zErrMsg); return -1; }
     }
@@ -322,16 +320,14 @@ int buy_command(int socket, char* request, sqlite3* db) {
 }
 
 /** Sells an amount of stock and responds to the client with the new balance.
- *  user_id is a TEXT string matching the Users.ID primary key.
  */
-int sell_command(int socket, char* request, sqlite3* db) {
+int sell_command(int socket, char* request, sqlite3* db, const string& session_username) {
     // parse input string
     char *saveptr = nullptr;
     char *sell = strtok_r(request, " ", &saveptr);
     char *stock_symbol = strtok_r(nullptr, " ", &saveptr);
     char *amount_str = strtok_r(nullptr, " ", &saveptr);
     char *price_str = strtok_r(nullptr, " ", &saveptr);
-    char *user_id = strtok_r(nullptr, " ", &saveptr);
 
     char response[256];
     char sql[256];
@@ -339,11 +335,11 @@ int sell_command(int socket, char* request, sqlite3* db) {
     char *zErrMsg = 0;
 
     // check for format errors
-    if (!sell || !stock_symbol || !amount_str || !price_str || !user_id) {
+    if (!sell || !stock_symbol || !amount_str || !price_str) {
         fprintf(stderr, "SELL command received but incorrectly formatted\n");
         fprintf(stderr, "Error message sent to client\n");
         snprintf(response, sizeof(response),
-                 "403 message format error\nCorrect format: SELL <stock_symbol> <amount_to_sell> <price_per_stock> <user_id>\n");
+                 "403 message format error\nCorrect format: SELL <stock_symbol> <amount_to_sell> <price_per_stock>\n");
         send(socket, response, strlen(response), 0);
         return -1;
     }
@@ -378,11 +374,11 @@ int sell_command(int socket, char* request, sqlite3* db) {
     // check if the user is in the database and if so get the balance
     double user_balance = -1;
     snprintf(sql, sizeof(sql),
-             "SELECT usd_balance FROM Users WHERE ID='%s'", user_id);
+             "SELECT usd_balance FROM Users WHERE ID='%s'", session_username.c_str());
     rc = sqlite3_exec(db, sql, getBalance_callback, &user_balance, &zErrMsg);
     if (rc != SQLITE_OK) { handle_SQL_error(socket, zErrMsg); return -1; }
     if (user_balance < 0) {
-        snprintf(response, sizeof(response), "500 user %s does not exist\n", user_id);
+        snprintf(response, sizeof(response), "500 user %s does not exist\n", session_username.c_str());
         fprintf(stderr, "%sError message sent to client\n", response);
         send(socket, response, strlen(response), 0);
         return -1;
@@ -392,7 +388,7 @@ int sell_command(int socket, char* request, sqlite3* db) {
     double shares_owned = -1;
     snprintf(sql, sizeof(sql),
              "SELECT stock_balance FROM Stocks WHERE stock_symbol='%s' AND user_id='%s'",
-             stock_symbol, user_id);
+             stock_symbol, session_username.c_str());
     rc = sqlite3_exec(db, sql, getBalance_callback, &shares_owned, &zErrMsg);
     if (rc != SQLITE_OK) { handle_SQL_error(socket, zErrMsg); return -1; }
 
@@ -414,7 +410,7 @@ int sell_command(int socket, char* request, sqlite3* db) {
     // Complete the sale: add money to user's account and remove shares from their portfolio
     user_balance += shares_sold_USD;
     snprintf(sql, sizeof(sql),
-             "UPDATE Users SET usd_balance=%f WHERE ID='%s'", user_balance, user_id);
+             "UPDATE Users SET usd_balance=%f WHERE ID='%s'", user_balance, session_username.c_str());
     rc = sqlite3_exec(db, sql, nullptr, nullptr, &zErrMsg);
     if (rc != SQLITE_OK) { handle_SQL_error(socket, zErrMsg); return -1; }
 
@@ -422,7 +418,7 @@ int sell_command(int socket, char* request, sqlite3* db) {
     double shares_owned_after_sale = shares_owned - num_shares_to_sell;
     snprintf(sql, sizeof(sql),
              "UPDATE Stocks SET stock_balance=%f WHERE stock_symbol='%s' AND user_id='%s'",
-             shares_owned_after_sale, stock_symbol, user_id);
+             shares_owned_after_sale, stock_symbol, session_username.c_str());
     rc = sqlite3_exec(db, sql, nullptr, nullptr, &zErrMsg);
     if (rc != SQLITE_OK) { handle_SQL_error(socket, zErrMsg); return -1; }
 
@@ -474,8 +470,7 @@ static int list_callback(void *data, int argc, char **argv, char **azColName) {
  *  Root sees every record in the database with the owning username appended.
  */
 int list_command(int socket, char* request, sqlite3* db,
-                 const string& username, bool is_root)
-{
+                 const string& username, bool is_root) {
     string response;
     string records;
     char sql[512];

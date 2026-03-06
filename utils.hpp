@@ -33,10 +33,11 @@ bool verify_login(sqlite3* db, const std::string& username, const std::string& p
 /** Buys an amount of stocks and responds to the client with the new balance.
  *  Creates or updates a record in the Stocks table if one does not exist.
  */
-int buy_command(int socket, char* request, sqlite3* db);
+int buy_command(int socket, char* request, sqlite3* db, const std::string& session_username);
 
-/** Sells an amount of stock and responds to the client with the new balance. */
-int sell_command(int socket, char* request, sqlite3* db);
+/** Sells an amount of stock and responds to the client with the new balance.
+ */
+int sell_command(int socket, char* request, sqlite3* db, const std::string& session_username);
 
 /** PA2 update: non-root users see only their own records, root sees all records.
  *  @param username  the logged-in user's username (used as the DB key)

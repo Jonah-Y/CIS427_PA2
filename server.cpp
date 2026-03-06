@@ -375,10 +375,10 @@ void* handle_client(void* args) {
         pthread_mutex_lock(&db_mutex);
 
         if (request.find("BUY", 0) == 0) {
-            buy_command(new_s, buf, db);
+            buy_command(new_s, buf, db, session_username);
 
         } else if (request.find("SELL", 0) == 0) {
-            sell_command(new_s, buf, db);
+            sell_command(new_s, buf, db, session_username);
 
         } else if (request == "LIST") {
             list_command(new_s, buf, db, session_username, is_root);

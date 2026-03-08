@@ -246,6 +246,7 @@ void check_clients(Pool *pool, sqlite3 *db, pthread_t* thread_handles, int liste
  *  Each thread gets its own session state (logged_in, session_username).
  */
 void* handle_client(void* args) {
+    pthread_detach(pthread_self());
     handle_client_args* data = static_cast<handle_client_args*>(args);
     int new_s   = data->fd;
     sqlite3* db = data->db;
@@ -339,8 +340,7 @@ void* handle_client(void* args) {
             session_username = "";
             const char* okMsg = "200 OK\n";
             send(new_s, okMsg, strlen(okMsg), 0);
-            printf("Connection closed after LOGOUT.\n");
-            break;
+            continue;
         }
 
         // All other commands require the user to be logged in

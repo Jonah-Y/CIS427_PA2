@@ -79,7 +79,6 @@ int main(int argc, char * argv[]) {
 
         // After QUIT, LOGOUT, or SHUTDOWN the server closes the connection
         bool will_disconnect = (strncmp(buf, "QUIT",     4) == 0)
-                            || (strncmp(buf, "LOGOUT",   6) == 0)
                             || (strncmp(buf, "SHUTDOWN", 8) == 0);
 
         /* receive response */
